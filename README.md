@@ -28,6 +28,18 @@ python trading_strategy.py --test-history    # backtest vs. buy-and-hold QQQ
 python trading_strategy.py --run             # today's regime/scores/target portfolio (no trades placed)
 ```
 
+**Note:** `trading_strategy.py` depends on packages installed inside `.venv` (numpy,
+yfinance, etc.). Running it with a bare `python`/`python3` from a shell where the venv
+isn't activated will fail with `ModuleNotFoundError`. Either activate the venv first
+(`source .venv/bin/activate`) or use the `run.sh` wrapper below, which activates it for you
+(and creates it on first use if it doesn't exist yet).
+
+```bash
+./run.sh --list-universe
+./run.sh --test-history --quarters 20 --capital 25000
+./run.sh --run --holdings my_holdings.json --output today.json
+```
+
 ### Examples
 
 ```bash
