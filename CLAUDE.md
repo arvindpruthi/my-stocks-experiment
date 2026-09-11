@@ -23,7 +23,9 @@ on disk under `.cache/market_data/` (gitignored) to avoid re-downloading on ever
 
 ## Running
 
-Everything goes through `trading_strategy.py`:
+Everything goes through `trading_strategy.py`, which needs the packages installed in
+`.venv` (activate it first, or use `./run.sh <args>`, which activates/creates the venv and
+forwards args to `trading_strategy.py`):
 
 ```bash
 python trading_strategy.py --list-universe            # print the tracked tickers + benchmark
