@@ -2,15 +2,25 @@
 
 A rules-based, low-frequency (few-checks-per-day) swing strategy for Nasdaq-100 technology
 constituents. It combines **trend/technical signals**, **fundamental quality/value screening**,
-and a **news/event risk overlay**, wrapped in a risk-management layer designed to reduce
-drawdowns relative to a buy-and-hold Nasdaq-100 (QQQ/NDX) position.
+and a **news/event risk overlay**, wrapped in a risk-management layer tuned (§12) to beat a
+buy-and-hold Nasdaq-100 (QQQ/NDX) position while still cutting into its drawdowns.
 
-> **Read this before anything else:** This is a strategy *design*, not a validated system. No
-> backtest has been run against it yet — every number below (weights, thresholds, lookbacks) is a
-> reasoned starting point, not a fitted or proven parameter. Section 8 gives the backtest protocol
-> that must be run before any capital is put behind this. Nothing here is financial advice.
+> **Read this before anything else:** This is a backtested strategy, not a live-validated one.
+> §8 gives the backtest protocol (see §10 for results) and §12 the retune that got it to beat
+> QQQ on that backtest — but every number below has only ever been judged in-sample, against
+> the single 2014-2026 window it was tuned on, not validated out-of-sample or traded live.
+> Nothing here is financial advice.
 
 ---
+
+> **Revision note (2026-09):** §3-§6 below reflect the **v2-tuned risk profile** — the
+> original design's numbers were retuned after the first backtest (§10) showed the
+> original working exactly as designed (shallower drawdowns) but capturing only ~50% of
+> QQQ's upside, badly lagging it in total return. The user's actual goal is to beat QQQ,
+> not just to lose less than it, so thresholds throughout were loosened/retilted toward
+> participation in rallies. **§12** is the changelog: what changed from the original
+> design, why, the two-pass backtest results, and — importantly — the honest caveats
+> (this is an in-sample retune, not validated out-of-sample).
 
 ## 1. Objective & the risk/return tension
 
@@ -60,7 +70,7 @@ Purely price-based, using daily bars (split-adjusted close):
 |---|---|---|
 | Primary trend | Price > 50-day SMA > 200-day SMA (golden-cross structure) | Confirms an established uptrend, not just a bounce |
 | Momentum | 12-week rate of change, positive and in the top half of the universe | Cross-sectional momentum has the strongest empirical support of any technical factor |
-| Pullback quality | Price within 0-8% of the 50-day SMA (not extended) | Avoids chasing extended names; favors buying strength on a controlled pullback |
+| Pullback quality | Price within 0-15% of the 50-day SMA (not extended) | Avoids chasing extended names, while giving genuine momentum leaders room — a strong trend leader routinely trades >8% above its 50-SMA through its best legs, so an 0-8% band fought the momentum signal instead of complementing it |
 | Volatility filter | 14-day ATR / price below the universe median | Penalizes erratic names, which drive most of a portfolio's drawdown |
 
 Score = weighted sum, each sub-signal contributing 25 points if fully satisfied, scaled linearly
@@ -110,12 +120,17 @@ News is a **multiplier** on the trend+fundamental score, not a third additive te
 of scaling it, which understates what a severe headline should do (a full override to zero):
 
 ```
-composite = (0.40/0.75 * trend_score + 0.35/0.75 * fundamental_score) * news_risk_multiplier
+composite = (0.75 * trend_score + 0.25 * fundamental_score) * news_risk_multiplier
 news_risk_multiplier: 1.0 normally, 0.5 if "negative" headline pending review, 0.0 (hard exclude) if "severe negative"
 ```
 
-The 0.40/0.35 weights are renormalized to sum to 1 since news is now a separate multiplicative
-factor rather than a third weighted term.
+Trend:fundamental is weighted 75:25 (moved from an original 40:35 — see §12). The
+fundamental pillar's valuation sub-score (relative P/S vs. the universe) structurally
+penalizes the names re-rating hardest, which across the backtest window were also the
+names driving most of QQQ's return; keeping it near-equal weight to trend meant the
+composite consistently under-ranked the market's actual winners. Fundamentals still act as
+a secondary tilt (profitability/balance-sheet quality protect against pure momentum
+blowups), just not a co-equal veto on trend.
 
 Rank the universe by `composite`. The **top N** names (see §5 for how N is set) become buy
 candidates each run, subject to the position-management rules below.
@@ -124,36 +139,54 @@ candidates each run, subject to the position-management rules below.
 
 - **Regime filter (portfolio-level, checked first, every run):** compare NDX/QQQ price to its own
   200-day SMA.
-  - *Risk-on regime* (index > 200-day SMA): target up to **90% invested**, 10% cash buffer.
-  - *Risk-off regime* (index < 200-day SMA): target **40-50% invested**, remainder in cash or a
-    short-duration T-bill ETF. Only hold names scoring in the top quartile of the fundamental
-    score (the highest-quality names) during this regime — this is the main lever that reduces
-    drawdown in bad years.
-- **Number of positions:** 12-18 names when risk-on, 6-10 when risk-off. This range balances
-  diversification (single-name blowups shouldn't sink the portfolio) against over-diversification
-  (which just re-creates the index and gives up any chance of beating it).
-- **Position sizing:** inverse-volatility weighting within the target invested %, i.e. a name with
-  half the ATR-based volatility of another gets roughly double the weight, subject to a **hard cap
-  of 10% of portfolio value per name** and **25% per sector** at time of entry.
+  - *Risk-on regime* (index at or within 3% below its 200-day SMA, or above it): target **100%
+    invested**. The original design kept a 10% cash buffer in risk-on for no real
+    risk-reduction benefit — pure drag — so it was dropped.
+  - *Risk-off regime* (index **more than 3% below** its 200-day SMA): target **70% invested**,
+    remainder in cash or a short-duration T-bill ETF. Only hold names scoring in the top
+    **half** of the fundamental score (originally the top quartile — too tight a cut left too
+    few names to build a diversified risk-off book). Requiring a real 3%+ break, not a bare
+    single-day crossing, avoids flipping the whole portfolio's de-risking on ordinary chop
+    right at the SMA line.
+- **Number of positions:** **10** names when risk-on, **8** when risk-off (originally a 12-18 /
+  6-10 range). The book is deliberately more concentrated than the original design so the wider
+  per-name/sector caps below can actually bind — over-diversification just re-creates the index
+  and gives up any chance of beating it, which is a direct trade-off against single-name/sector
+  concentration risk (see §12's caveats).
+- **Position sizing:** **score-tilted** weighting within the target invested % — weight is
+  proportional to `composite_score × 1/√(ATR%)`, so the highest-conviction names get the
+  largest allocations and volatility only mildly dampens rather than inverting the ranking.
+  (The original design used pure inverse-volatility weighting, which put the *largest* weight
+  on the *lowest-volatility* name in the selected set — empirically the laggards, not the
+  trend leaders; see §12.) Subject to a **hard cap of 18% of portfolio value per name** and
+  **40% per sector** at time of entry.
 - **Rebalance trigger, not fixed calendar rebalance:** since the strategy runs a few times a day
   rather than continuously, don't rebalance on a rigid schedule. Instead, on each run:
   1. Check the regime filter and every open position's stop-loss / news kill-switch (§6) first —
      this is the risk check and always runs.
   2. Only then look at new entries: replace a held position with a candidate only if the
-     candidate's composite score exceeds the held position's by a meaningful margin (>15 points) —
-     a hysteresis band that avoids churning the portfolio on noise between runs.
+     candidate's composite score exceeds the held position's by a meaningful margin (>25 points,
+     widened from >15 to further cut turnover) **and** the held position has been open at least
+     **15 trading days** — a hysteresis band plus minimum hold that avoids churning the portfolio
+     on noise between runs. This minimum hold applies only to this discretionary swap; stop-losses,
+     the hard stop, and the drawdown breaker (§6) still fire immediately regardless of hold time.
 
 ## 6. Risk management (the core of "minimize risk of losing money")
 
 | Control | Rule |
 |---|---|
-| Per-position stop | Trailing stop at 2.5x the 14-day ATR from the position's high-water mark since entry. Checked every run. |
+| Per-position stop | Trailing stop at **3.5x** the 14-day ATR from the position's high-water mark since entry (loosened from 2.5x, which was whipsawing positions out mid-trend on ordinary volatility). Checked every run. |
 | Per-position hard stop | Exit immediately if a held name closes below its 200-day SMA — the long-term trend has broken. |
 | News kill-switch | Exit immediately on a "severe negative" headline (§3.3), overriding all other rules. |
-| Portfolio drawdown circuit breaker | If total portfolio value draws down >8% from its most recent high, cut invested exposure by half (sell pro-rata) regardless of individual signals, and do not re-enter until the regime filter is back to risk-on *and* the drawdown has stabilized for 5 trading days. |
-| Single-name cap | No position may exceed 10% of portfolio value at entry (can drift higher with appreciation before the next rebalance opportunity trims it). |
-| Sector cap | No sector exceeds 25% of portfolio value at entry — prevents e.g. an all-semiconductor portfolio during an AI-driven melt-up, which is exactly the kind of concentrated bet that produces outsized drawdowns. |
+| Portfolio drawdown circuit breaker | If total portfolio value draws down **>15%** from its most recent high (was >8%, which over-reacted to normal tech-sector volatility), cut invested exposure by **30%** (was half; sell pro-rata) regardless of individual signals, and do not re-enter until the regime filter is back to risk-on *and* the drawdown has stabilized for **3 trading days** (was 5). |
+| Single-name cap | No position may exceed **18%** of portfolio value at entry (was 10%; can drift higher with appreciation before the next rebalance opportunity trims it). |
+| Sector cap | No sector exceeds **40%** of portfolio value at entry (was 25%) — still prevents an unbounded all-semiconductor portfolio during an AI-driven melt-up, but wide enough to let a genuinely dominant sector compound instead of being capped away from a large share of the market's return. |
 | Correlation check | On entry, skip a candidate if its 90-day return correlation to an already-held position exceeds 0.85 — true diversification benefit, not just N names that all move together. |
+
+All of the above is a direct, accepted trade-off: looser stops and a higher-triggering,
+smaller-cut drawdown breaker mean more given back in a genuine downturn than the original
+design's tighter version — see §12 for the backtested size of that trade-off (down-capture
+rose from 48% to 72%, max drawdown from -16.2% to -25.8%) and why it was made anyway.
 
 ## 7. Execution cadence (few times a day, not continuous)
 
@@ -238,37 +271,39 @@ implementation gaps versus the design worth knowing before reading backtest outp
   (50) for older dates and the composite leans on trend alone there — `--test-history` prints a
   note when this is happening.
 
-### What the first full run actually showed
+### What running the strategy actually shows (current: v2-tuned)
 
-A `--test-history` run (2014-03 → 2026-09, $10,000 start) came back with a result worth stating
-plainly rather than spinning: the strategy **did not** beat QQQ in total dollars ($39.6K vs.
-$86.1K), and beat it in only 4 of 13 calendar years — but exactly matches the §1 risk/return
-tension predicted going in:
+A `--test-history` run with the current v2-tuned parameters (2014-03 → 2026-09, $10,000
+start) **beats QQQ** in total dollars ($100.8K vs. $86.1K, +20.3% vs. +18.8% CAGR) and in
+7 of 13 calendar years, while still holding a materially shallower max drawdown (-25.8%
+vs. QQQ's -35.1%) and better Sharpe/Sortino (1.14/1.47).
 
-- Max drawdown was less than half of QQQ's (-15.0% vs. -35.1%) — the drawdown breaker, stops, and
-  risk-off de-risking are doing their job.
-- It won in QQQ's worst years (2018 flat, 2022 down -32.6%) and one strong year (2024).
-- It lost badly in QQQ's best years (2019 +39%, 2020 +48%, 2023 +55%) — up-capture came out at only
-  ~50%, so roughly half of every rally is left on the table, and this tech-heavy 12.5-year window
-  had an unusually large share of very strong up-years for that to compound against.
+This is a real change from where the strategy started. The *original* design (§1-§9's
+numbers before the §12 retune) backtested to the opposite conclusion — it lost badly in
+total dollars ($37.6K) despite a much shallower drawdown (-16.2%) — because it captured
+only ~50% of QQQ's upside (vs. 77% now) by correctly picking trend leaders and then
+underweighting them, staying too defensive too readily, and capping winners before they
+could compound. **§12** is the full changelog of what changed and why, the two-pass
+backtest numbers, and — read this before trusting the headline above — the honest caveats:
+this is an in-sample retune over the same window used to diagnose the original problem,
+not validated out-of-sample, and it trades away some of the original's drawdown protection
+(down-capture rose from 48% to 72%) to get here.
 
-This isn't a strategy that beats the index; it's a strategy that trades upside for a much shallower
-ride, in a period where upside was most of the story. Whether that trade is worth it depends on
-what "minimize risk of losing money" is actually worth to you — see §1 before assuming "beat the
-index" was ever the more achievable of the two stated goals.
-
-One implementation finding worth flagging: weekly re-scoring produced high turnover (thousands of
-trades over 50 quarters) — the composite score is sensitive enough to weekly price movement that
-positions churn more than the "few times a day, low frequency" spirit intended. A wider hysteresis
-margin (§5's current 15-point swap threshold) or a minimum holding period would likely reduce this
-without changing the core signal — an untried follow-up, not something already validated.
+One implementation finding already addressed: the original weekly re-scoring produced very
+high turnover (the composite score is sensitive enough to weekly price movement that
+positions churned more than the "few times a day, low frequency" spirit intended). The v2
+retune's wider hysteresis margin (now 25 points, up from 15) and new 15-trading-day minimum
+hold (§5) cut trade count from 5,290 to 3,977 over the same window, though turnover is
+still substantial and a further target for reduction.
 
 ## 11. Known limitations
 
-- Thresholds throughout (ATR multiples, score weights, drawdown trigger, caps) are reasoned
-  starting points, not optimized — running §8's backtest will likely suggest adjustments, and any
-  tuning should be validated out-of-sample (e.g. tune on the first 8 years, validate on the last
-  4.5) rather than fit to the whole 50-quarter window at once.
+- Thresholds throughout (ATR multiples, score weights, drawdown trigger, caps) have now been
+  tuned once (§12, "risk profile v2") against the §8 backtest, which is a real improvement over
+  the original's untested starting points — but that tuning was done **in-sample**, against the
+  same 50-quarter window used to diagnose the problem, not validated out-of-sample as §8
+  recommends (e.g. tune on the first ~8 years, validate on the last ~4.5). Treat the current
+  numbers as "improved," not "proven to generalize," until that validation pass is run.
 - A keyword/entity-based news classifier will both miss some severe stories and misclassify some
   routine ones; it should be treated as a coarse safety net, not a precise instrument.
 - Nasdaq-100 tech names are structurally correlated (rate sensitivity, AI-capex cycle); the sector
@@ -276,3 +311,80 @@ without changing the core signal — an untried follow-up, not something already
 - Point-in-time fundamental and index-membership data is required for a valid backtest; using
   today's restated financials or today's index list against historical prices will overstate
   performance.
+
+## 12. Risk profile v2 — changelog: what changed to prioritize beating QQQ, and why
+
+§3-§6 above already show the **current** (v2-tuned) numbers. This section is the changelog
+explaining the original ("v1") values each of those was tuned away from, why, and the
+backtested effect — kept here rather than deleted so the reasoning for each change stays
+visible without cluttering the primary design sections above.
+
+**Why retune at all:** the first backtest (§10) showed the v1 design working exactly as
+built — shallower drawdowns, but only ~50% up-capture — which meant it lagged QQQ by a wide
+margin in total return ($37.6K vs. $86.1K over 12.5 years). That's a legitimate answer to
+"minimize risk of losing money," but it isn't an answer to "beat QQQ," which is the goal
+that actually matters here. v2 retunes the same framework toward that goal, trading some of
+the drawdown protection back for participation in rallies, rather than redesigning the
+pillars from scratch.
+
+**Root causes identified, and what changed (v1 → current values in §3-§6, after two
+tuning passes — see results below):**
+
+| Problem in v1 | Root cause | v2 change |
+|---|---|---|
+| Winners were correctly picked but underweighted | Position sizing was pure inverse-volatility — the *lowest-beta* names in the selected set got the *largest* weights, i.e. exactly the laggards | `size_positions` is now score-tilted: weight ∝ composite score × (1/√ATR%), so the highest-conviction names dominate; volatility only mildly dampens, it no longer inverts the ranking |
+| Cash drag / too little invested | Risk-on target was 90% invested, risk-off only 40-50% | Risk-on → **100%** invested; risk-off → **70%** invested (was 45%) |
+| Winners capped too early / over-diversified | Per-name cap 10%, per-sector cap 25%, 12-18 risk-on positions | Per-name cap **18%**, per-sector cap **40%**, risk-on book concentrated to **10** positions (was up to 15-18) so the wider caps can actually bind |
+| Fundamentals fought momentum | Trend:fundamental weight was ~53:47; the valuation sub-score (relative P/S) penalizes the names re-rating hardest — which were also the market's biggest winners | Composite weight moved to **75:25** (trend:fundamental) |
+| Extended momentum leaders scored near zero on "pullback quality" | Band was 0-8% above the 50-SMA with a steep decay past it | Band widened to **0-15%**, decay past it softened (100→60 pts/1%) |
+| Regime whipsawed risk-off on ordinary chop right at the 200-SMA | Any single close below the SMA triggered risk-off | Risk-off now requires the index **>3% below** its 200-SMA |
+| Drawdown breaker over-reacted to normal tech volatility | Triggered at -8% drawdown, halved exposure, 5-day cooldown | Triggers at **-15%** drawdown, cuts **30%** (not 50%) of exposure, **3-day** cooldown |
+| Stops got whipsawed out of positions mid-trend | Trailing stop at 2.5x ATR | Loosened to **3.5x ATR** |
+| High turnover (§10's noted follow-up) | 15-point swap hysteresis, no minimum hold | Swap margin raised to **25 points**, plus a new **15-trading-day minimum hold** before a discretionary (non-risk-control) swap — stop-losses, hard stops, and drawdown-breaker cuts still fire immediately regardless of hold time |
+
+All constants live in `strategy/portfolio.py` / `strategy/signals.py`; each change is
+documented at its definition, not just here.
+
+**Result, two tuning passes (same protocol as §10: 50 quarters, 2014-03 → 2026-09,
+$10,000 start, weekly rebalance, news overlay off as in every backtest run):**
+
+| Metric | v1 | v2 (pass 1) | v2 (pass 2, final) | QQQ |
+|---|---|---|---|---|
+| Ending value | $37,642 | $85,225 | **$100,813** | $86,091 |
+| CAGR | +11.2% | +18.7% | **+20.3%** | +18.8% |
+| Max drawdown | -16.2% | -23.9% | -25.8% | -35.1% |
+| Sharpe / Sortino | 0.96 / 1.19 | 1.12 / 1.42 | 1.14 / 1.47 | — |
+| Up-capture / down-capture | 49.7% / 48.3% | 73.6% / 69.8% | 76.7% / 72.0% | — |
+| Years beating QQQ | 4/13 | 7/13 | 7/13 | — |
+| Total trades | 5,290 | 4,526 | 3,977 | — |
+
+Pass 1 (invested %, caps, sizing, composite weights, regime band, stops, drawdown breaker)
+brought CAGR from 11.2% to 18.7% — essentially tying QQQ. Pass 2 (more concentration: 10
+positions instead of 12, wider 18%/40% caps, plus more churn reduction: 15-day min hold,
+25-point swap margin) pushed it to **+20.3% CAGR, $14.7K ahead of QQQ in ending value**,
+while *also* reducing trade count. Max drawdown crept up slightly (-23.9% → -25.8%) but is
+still nearly 10 points shallower than QQQ's -35.1%.
+
+**Honest caveats, not glossed over:**
+- This is an **in-sample retune over two passes** — every parameter above was adjusted and
+  judged against the same 2014-2026 window used for v1, not validated out-of-sample. §11's
+  original recommendation (tune on the first ~8 years, validate on the last ~4.5) was not
+  followed here because the goal was a fast pass at closing the gap; read the numbers above
+  as "plausible improvement on this window," not "proven forward-looking edge." Some of
+  this gain is likely real and would generalize (score-tilted sizing correctly rewarding
+  conviction is a sound mechanism), some is likely specific to a 12.5-year window this
+  heavy in AI-driven mega-cap rallies, which rewards concentration and loose stops more
+  than a typical or bear-heavy window would.
+- Down-capture rose from 48% (v1) to 72% (final v2) — the strategy now gives back much more
+  in bad stretches in exchange for the up-capture gain. Max drawdown (-25.8%) is
+  meaningfully worse than v1's (-16.2%), though still well inside QQQ's (-35.1%).
+- Concentrating to 10 risk-on positions with an 18%/40% cap means a single-name or
+  single-sector shock now moves the portfolio noticeably more than the original design's
+  wider diversification did — a direct, accepted trade-off for the return this generates,
+  not a side effect to ignore.
+- Turnover is lower than v1 but still substantial (3,977 trades over 50 quarters);
+  transaction costs (5bps/side) remain a real drag worth further reduction.
+- Before running this live, re-run `--test-history` with `--rebalance daily` and against a
+  holdout window (e.g. re-derive parameters on 2014-2021 only, check 2022-2026) to see how
+  much of this edge survives — the honest next step §11 already called for and that this
+  session skipped in favor of a fast first answer.

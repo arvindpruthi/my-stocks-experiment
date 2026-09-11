@@ -17,6 +17,14 @@ report output rather than silently:
   reconstruction of Nasdaq-100 history.
 - Adjusted close (yfinance `auto_adjust=True`) approximates total return
   (dividends + splits) for both the strategy and the QQQ benchmark.
+
+Risk profile v2 (see stock-trading-strategy.md "Risk profile v2" section):
+the drawdown breaker now cuts exposure by `portfolio.DRAWDOWN_CUT_FRACTION`
+(30%) instead of always halving it, the risk-off fundamental-quality filter
+uses the top half of the universe (was top quartile) so risk-off still holds
+a workable number of names, and discretionary hysteresis swaps (not risk-control
+exits — those still fire immediately) respect `portfolio.MIN_HOLDING_DAYS` to
+cut churn.
 """
 
 from __future__ import annotations
@@ -113,6 +121,7 @@ def run_backtest(
     cash = capital
     holdings: dict[str, float] = {}       # ticker -> shares
     high_water: dict[str, float] = {}     # ticker -> price high-water mark since entry
+    entry_date: dict[str, pd.Timestamp] = {}  # ticker -> date position was opened
     breaker = portfolio.DrawdownBreaker()
     trade_count = 0
 
@@ -132,12 +141,15 @@ def run_backtest(
                 px = prices_today.get(t)
                 if px is None or pd.isna(px):
                     continue
-                sell_shares = holdings[t] * 0.5
+                sell_shares = holdings[t] * portfolio.DRAWDOWN_CUT_FRACTION
                 proceeds = sell_shares * px
                 cash += proceeds * (1 - TX_COST_BPS)
                 holdings[t] -= sell_shares
                 trade_count += 1
-            logger.info("%s: drawdown breaker tripped, exposure halved.", d.date())
+            logger.info(
+                "%s: drawdown breaker tripped, exposure cut %.0f%%.",
+                d.date(), portfolio.DRAWDOWN_CUT_FRACTION * 100,
+            )
         breaker.reset_if_recovered(current_regime, equity, d)
 
         # 3) per-position stop checks
@@ -155,6 +167,7 @@ def run_backtest(
                 cash += holdings[t] * px * (1 - TX_COST_BPS)
                 del holdings[t]
                 high_water.pop(t, None)
+                entry_date.pop(t, None)
                 trade_count += 1
 
         # 4) rebalance (full re-score + position changes)
@@ -172,7 +185,11 @@ def run_backtest(
 
             eligible = list(t_scores.index)
             if current_regime == "risk_off" and use_fundamentals and f_scores.notna().sum() >= 8:
-                threshold = f_scores.quantile(0.75)
+                # Top half (was top quartile) — still tilts risk-off holdings
+                # toward quality, but a quartile cut left too few names to
+                # build a diversified book, forcing concentration that then
+                # got clipped hard by the per-name cap.
+                threshold = f_scores.quantile(0.5)
                 eligible = [t for t in eligible if f_scores.get(t, 50.0) >= threshold]
 
             ranked = composite.reindex(eligible).dropna().sort_values(ascending=False).index.tolist()
@@ -186,6 +203,7 @@ def run_backtest(
                 trade_count += 1
                 del holdings[t]
                 high_water.pop(t, None)
+                entry_date.pop(t, None)
 
             candidates = [t for t in ranked if t not in held]
             returns_panel = close.pct_change().loc[:d].tail(90)
@@ -195,11 +213,21 @@ def run_backtest(
             open_slots = max_positions - len(target)
             target.extend(candidates[:max(open_slots, 0)])
 
-            # hysteresis swap: replace weakest held name if a leftover candidate clearly beats it
+            # hysteresis swap: replace weakest held name if a leftover candidate
+            # clearly beats it. v2: only swap out held names that have cleared
+            # MIN_HOLDING_DAYS — this is a discretionary "found something
+            # better" trade, not a risk control, so it shouldn't undo a
+            # position before it's had time to work.
             leftover = [c for c in candidates if c not in target]
             swaps = 0
             while leftover and target and swaps < 3:
-                held_scores = composite.reindex(target).sort_values()
+                swappable = [
+                    t for t in target
+                    if t not in entry_date or (d - entry_date[t]).days >= portfolio.MIN_HOLDING_DAYS
+                ]
+                if not swappable:
+                    break
+                held_scores = composite.reindex(swappable).sort_values()
                 worst_held, worst_score = held_scores.index[0], held_scores.iloc[0]
                 best_candidate, best_score = leftover[0], composite.get(leftover[0], float("-inf"))
                 if best_score - worst_score > portfolio.SCORE_SWAP_MARGIN:
@@ -211,7 +239,7 @@ def run_backtest(
                     break
 
             atr_pct = (atr14.loc[d] / prices_today).reindex(target)
-            weights = portfolio.size_positions(target, atr_pct, target_invested_pct)
+            weights = portfolio.size_positions(target, composite.reindex(target), atr_pct, target_invested_pct)
 
             for t in list(holdings.keys()):
                 if t not in weights:
@@ -221,6 +249,7 @@ def run_backtest(
                     trade_count += 1
                     del holdings[t]
                     high_water.pop(t, None)
+                    entry_date.pop(t, None)
 
             equity_now = cash + sum(holdings.get(t, 0.0) * prices_today.get(t, 0.0) for t in holdings)
             for t, w in weights.items():
@@ -231,15 +260,16 @@ def run_backtest(
                 target_shares = target_value / px
                 delta_shares = target_shares - holdings.get(t, 0.0)
                 # Rebalance band: skip trades that are just noise from weekly
-                # inverse-vol weight drift, not a real position change — a
-                # more realistic (and much lower-turnover) approximation of
-                # "few times a day" than trading every $1 of drift.
+                # target-weight drift, not a real position change — a more
+                # realistic (and much lower-turnover) approximation of "few
+                # times a day" than trading every $1 of drift.
                 if abs(delta_shares * px) < max(50.0, 0.005 * equity_now):
                     continue
                 notional = delta_shares * px
                 cash -= notional + abs(notional) * TX_COST_BPS
                 holdings[t] = holdings.get(t, 0.0) + delta_shares
                 high_water.setdefault(t, px)
+                entry_date.setdefault(t, d)
                 trade_count += 1
 
         equity_end_of_day = cash + sum(holdings.get(t, 0.0) * prices_today.get(t, 0.0) for t in holdings)
