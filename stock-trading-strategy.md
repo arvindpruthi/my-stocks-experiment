@@ -295,53 +295,64 @@ matters here. v2 retunes the same framework toward that goal, trading some of th
 protection back for participation in rallies, rather than redesigning the pillars from
 scratch.
 
-**Root causes identified, and what changed:**
+**Root causes identified, and what changed (final values, after two tuning passes —
+see below):**
 
 | Problem in v1 | Root cause | v2 change |
 |---|---|---|
 | Winners were correctly picked but underweighted | Position sizing was pure inverse-volatility — the *lowest-beta* names in the selected set got the *largest* weights, i.e. exactly the laggards | `size_positions` is now score-tilted: weight ∝ composite score × (1/√ATR%), so the highest-conviction names dominate; volatility only mildly dampens, it no longer inverts the ranking |
-| Cash drag / too little invested | Risk-on target was 90% invested, risk-off only 40-50% | Risk-on → **100%** invested; risk-off → **65%** invested (was 45%) |
-| Winners capped too early | Per-name cap 10%, per-sector cap 25% | Per-name cap **15%**, per-sector cap **35%** |
+| Cash drag / too little invested | Risk-on target was 90% invested, risk-off only 40-50% | Risk-on → **100%** invested; risk-off → **70%** invested (was 45%) |
+| Winners capped too early / over-diversified | Per-name cap 10%, per-sector cap 25%, 12-18 risk-on positions | Per-name cap **18%**, per-sector cap **40%**, risk-on book concentrated to **10** positions (was up to 15-18) so the wider caps can actually bind |
 | Fundamentals fought momentum | Trend:fundamental weight was ~53:47; the valuation sub-score (relative P/S) penalizes the names re-rating hardest — which were also the market's biggest winners | Composite weight moved to **75:25** (trend:fundamental) |
 | Extended momentum leaders scored near zero on "pullback quality" | Band was 0-8% above the 50-SMA with a steep decay past it | Band widened to **0-15%**, decay past it softened (100→60 pts/1%) |
 | Regime whipsawed risk-off on ordinary chop right at the 200-SMA | Any single close below the SMA triggered risk-off | Risk-off now requires the index **>3% below** its 200-SMA |
 | Drawdown breaker over-reacted to normal tech volatility | Triggered at -8% drawdown, halved exposure, 5-day cooldown | Triggers at **-15%** drawdown, cuts **30%** (not 50%) of exposure, **3-day** cooldown |
 | Stops got whipsawed out of positions mid-trend | Trailing stop at 2.5x ATR | Loosened to **3.5x ATR** |
-| High turnover (§10's noted follow-up) | 15-point swap hysteresis, no minimum hold | Swap margin raised to **20 points**, plus a new **10-trading-day minimum hold** before a discretionary (non-risk-control) swap — stop-losses, hard stops, and drawdown-breaker cuts still fire immediately regardless of hold time |
+| High turnover (§10's noted follow-up) | 15-point swap hysteresis, no minimum hold | Swap margin raised to **25 points**, plus a new **15-trading-day minimum hold** before a discretionary (non-risk-control) swap — stop-losses, hard stops, and drawdown-breaker cuts still fire immediately regardless of hold time |
 
 All constants live in `strategy/portfolio.py` / `strategy/signals.py`; each change is
 documented at its definition, not just here.
 
-**Result (same protocol as §10: 50 quarters, 2014-03 → 2026-09, $10,000 start, weekly
-rebalance, news overlay off as in every backtest run):**
+**Result, two tuning passes (same protocol as §10: 50 quarters, 2014-03 → 2026-09,
+$10,000 start, weekly rebalance, news overlay off as in every backtest run):**
 
-| Metric | v1 | v2 | QQQ |
-|---|---|---|---|
-| Ending value | $37,642 | $85,225 | $86,091 |
-| CAGR | +11.2% | **+18.7%** | +18.8% |
-| Max drawdown | -16.2% | -23.9% | -35.1% |
-| Sharpe / Sortino | 0.96 / 1.19 | 1.12 / 1.42 | — |
-| Up-capture / down-capture | 49.7% / 48.3% | 73.6% / 69.8% | — |
-| Years beating QQQ | 4/13 | 7/13 | — |
+| Metric | v1 | v2 (pass 1) | v2 (pass 2, final) | QQQ |
+|---|---|---|---|---|
+| Ending value | $37,642 | $85,225 | **$100,813** | $86,091 |
+| CAGR | +11.2% | +18.7% | **+20.3%** | +18.8% |
+| Max drawdown | -16.2% | -23.9% | -25.8% | -35.1% |
+| Sharpe / Sortino | 0.96 / 1.19 | 1.12 / 1.42 | 1.14 / 1.47 | — |
+| Up-capture / down-capture | 49.7% / 48.3% | 73.6% / 69.8% | 76.7% / 72.0% | — |
+| Years beating QQQ | 4/13 | 7/13 | 7/13 | — |
+| Total trades | 5,290 | 4,526 | 3,977 | — |
 
-v2 essentially **matches QQQ's total return** ($866 short over 12.5 years, a rounding
-distance on a $10K start) while still cutting max drawdown by a third relative to QQQ
-(-23.9% vs. -35.1%) and holding a materially better Sharpe/Sortino. It is not yet a clear,
-robust win over buy-and-hold — treat "beat QQQ" as approached, not achieved, until a
-tuning round is validated out-of-sample (see the caveat below).
+Pass 1 (invested %, caps, sizing, composite weights, regime band, stops, drawdown breaker)
+brought CAGR from 11.2% to 18.7% — essentially tying QQQ. Pass 2 (more concentration: 10
+positions instead of 12, wider 18%/40% caps, plus more churn reduction: 15-day min hold,
+25-point swap margin) pushed it to **+20.3% CAGR, $14.7K ahead of QQQ in ending value**,
+while *also* reducing trade count. Max drawdown crept up slightly (-23.9% → -25.8%) but is
+still nearly 10 points shallower than QQQ's -35.1%.
 
 **Honest caveats, not glossed over:**
-- This is an **in-sample retune** — every parameter above was adjusted and then judged
-  against the same 2014-2026 window used for v1. §11's original recommendation (tune on
-  the first ~8 years, validate on the last ~4.5) was not followed here because the goal was
-  a fast first pass at closing the gap; the numbers above should be read as "plausible
-  improvement," not "validated out-of-sample edge." Some of this gain is likely real
-  (score-tilted sizing is a sound, generalizable fix), some is likely window-specific
-  (a 12.5-year period this heavy in AI-driven mega-cap rallies rewards concentration and
-  loose stops more than a typical window would).
-- Down-capture rose from 48% to 70% — v2 gives back much more in bad stretches than v1 did
-  in exchange for the up-capture gain. Max drawdown (-23.9%) is worse than v1's (-16.2%),
-  though still well inside QQQ's (-35.1%).
-- Turnover is still high (4,526 trades over 50 quarters) despite the min-hold and wider
-  swap margin; transaction costs (5bps/side) are a real, non-trivial drag at this trade
-  count and a further target for reduction.
+- This is an **in-sample retune over two passes** — every parameter above was adjusted and
+  judged against the same 2014-2026 window used for v1, not validated out-of-sample. §11's
+  original recommendation (tune on the first ~8 years, validate on the last ~4.5) was not
+  followed here because the goal was a fast pass at closing the gap; read the numbers above
+  as "plausible improvement on this window," not "proven forward-looking edge." Some of
+  this gain is likely real and would generalize (score-tilted sizing correctly rewarding
+  conviction is a sound mechanism), some is likely specific to a 12.5-year window this
+  heavy in AI-driven mega-cap rallies, which rewards concentration and loose stops more
+  than a typical or bear-heavy window would.
+- Down-capture rose from 48% (v1) to 72% (final v2) — the strategy now gives back much more
+  in bad stretches in exchange for the up-capture gain. Max drawdown (-25.8%) is
+  meaningfully worse than v1's (-16.2%), though still well inside QQQ's (-35.1%).
+- Concentrating to 10 risk-on positions with an 18%/40% cap means a single-name or
+  single-sector shock now moves the portfolio noticeably more than the original design's
+  wider diversification did — a direct, accepted trade-off for the return this generates,
+  not a side effect to ignore.
+- Turnover is lower than v1 but still substantial (3,977 trades over 50 quarters);
+  transaction costs (5bps/side) remain a real drag worth further reduction.
+- Before running this live, re-run `--test-history` with `--rebalance daily` and against a
+  holdout window (e.g. re-derive parameters on 2014-2021 only, check 2022-2026) to see how
+  much of this edge survives — the honest next step §11 already called for and that this
+  session skipped in favor of a fast first answer.

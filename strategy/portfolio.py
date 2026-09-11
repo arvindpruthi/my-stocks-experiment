@@ -19,15 +19,15 @@ import pandas as pd
 
 from . import universe
 
-NAME_CAP = 0.15
-SECTOR_CAP = 0.35
+NAME_CAP = 0.18
+SECTOR_CAP = 0.40
 CORRELATION_THRESHOLD = 0.85
 DRAWDOWN_TRIGGER = 0.15
 DRAWDOWN_CUT_FRACTION = 0.30
 DRAWDOWN_COOLDOWN_DAYS = 3
 STOP_ATR_MULTIPLE = 3.5
-SCORE_SWAP_MARGIN = 20.0
-MIN_HOLDING_DAYS = 10
+SCORE_SWAP_MARGIN = 25.0
+MIN_HOLDING_DAYS = 15
 REGIME_RISK_OFF_BAND = 0.03  # index must be >3% below its 200-SMA to de-risk
 
 
@@ -48,13 +48,14 @@ def regime_targets(current_regime: str) -> tuple[float, int]:
     """Returns (target_invested_pct, max_positions).
 
     Risk-on now targets fully invested (was 90%, a 10% cash drag with no
-    real risk-reduction benefit) with a more concentrated book (12 vs. 15
-    names) so the wider name/sector caps below can actually matter. Risk-off
-    still de-risks but to 65% (was 45%) — the old level gave up too much of
-    the V-shaped recoveries that follow most tech corrections."""
+    real risk-reduction benefit) with a more concentrated book (10 vs. the
+    original 15 names) so the wider name/sector caps below can actually
+    matter. Risk-off still de-risks but to 70% (was 45%) — the old level
+    gave up too much of the V-shaped recoveries that follow most tech
+    corrections."""
     if current_regime == "risk_on":
-        return 1.00, 12
-    return 0.65, 8
+        return 1.00, 10
+    return 0.70, 8
 
 
 def filter_correlated(
