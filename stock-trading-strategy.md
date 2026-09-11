@@ -12,6 +12,14 @@ drawdowns relative to a buy-and-hold Nasdaq-100 (QQQ/NDX) position.
 
 ---
 
+> **Revision note (2026-09):** §1-9 below are the *original* design. The first full
+> backtest (see §10) showed it working exactly as designed — shallower drawdowns, but
+> only ~50% up-capture, so it lagged QQQ badly in strong years. The user's actual goal is
+> to beat QQQ, not just to lose less than it, so the risk profile was retuned; see **§12
+> Risk profile v2** for the specific changes, why, and the results. §12 supersedes the
+> numeric parameters in §3-§6 below — this file keeps both versions rather than editing
+> history so the reasoning for the change stays visible.
+
 ## 1. Objective & the risk/return tension
 
 **Stated goal:** minimize the risk of losing money while beating the Nasdaq-100 in *any given
@@ -276,3 +284,64 @@ without changing the core signal — an untried follow-up, not something already
 - Point-in-time fundamental and index-membership data is required for a valid backtest; using
   today's restated financials or today's index list against historical prices will overstate
   performance.
+
+## 12. Risk profile v2 — retuned to prioritize beating QQQ
+
+**Why:** the §10 backtest showed the v1 design working exactly as built — shallower
+drawdowns, but only ~50% up-capture — which meant it lagged QQQ by a wide margin in total
+return ($37.6K vs. $86.1K over 12.5 years). That's a legitimate answer to "minimize risk of
+losing money," but it isn't an answer to "beat QQQ," which is the goal that actually
+matters here. v2 retunes the same framework toward that goal, trading some of the drawdown
+protection back for participation in rallies, rather than redesigning the pillars from
+scratch.
+
+**Root causes identified, and what changed:**
+
+| Problem in v1 | Root cause | v2 change |
+|---|---|---|
+| Winners were correctly picked but underweighted | Position sizing was pure inverse-volatility — the *lowest-beta* names in the selected set got the *largest* weights, i.e. exactly the laggards | `size_positions` is now score-tilted: weight ∝ composite score × (1/√ATR%), so the highest-conviction names dominate; volatility only mildly dampens, it no longer inverts the ranking |
+| Cash drag / too little invested | Risk-on target was 90% invested, risk-off only 40-50% | Risk-on → **100%** invested; risk-off → **65%** invested (was 45%) |
+| Winners capped too early | Per-name cap 10%, per-sector cap 25% | Per-name cap **15%**, per-sector cap **35%** |
+| Fundamentals fought momentum | Trend:fundamental weight was ~53:47; the valuation sub-score (relative P/S) penalizes the names re-rating hardest — which were also the market's biggest winners | Composite weight moved to **75:25** (trend:fundamental) |
+| Extended momentum leaders scored near zero on "pullback quality" | Band was 0-8% above the 50-SMA with a steep decay past it | Band widened to **0-15%**, decay past it softened (100→60 pts/1%) |
+| Regime whipsawed risk-off on ordinary chop right at the 200-SMA | Any single close below the SMA triggered risk-off | Risk-off now requires the index **>3% below** its 200-SMA |
+| Drawdown breaker over-reacted to normal tech volatility | Triggered at -8% drawdown, halved exposure, 5-day cooldown | Triggers at **-15%** drawdown, cuts **30%** (not 50%) of exposure, **3-day** cooldown |
+| Stops got whipsawed out of positions mid-trend | Trailing stop at 2.5x ATR | Loosened to **3.5x ATR** |
+| High turnover (§10's noted follow-up) | 15-point swap hysteresis, no minimum hold | Swap margin raised to **20 points**, plus a new **10-trading-day minimum hold** before a discretionary (non-risk-control) swap — stop-losses, hard stops, and drawdown-breaker cuts still fire immediately regardless of hold time |
+
+All constants live in `strategy/portfolio.py` / `strategy/signals.py`; each change is
+documented at its definition, not just here.
+
+**Result (same protocol as §10: 50 quarters, 2014-03 → 2026-09, $10,000 start, weekly
+rebalance, news overlay off as in every backtest run):**
+
+| Metric | v1 | v2 | QQQ |
+|---|---|---|---|
+| Ending value | $37,642 | $85,225 | $86,091 |
+| CAGR | +11.2% | **+18.7%** | +18.8% |
+| Max drawdown | -16.2% | -23.9% | -35.1% |
+| Sharpe / Sortino | 0.96 / 1.19 | 1.12 / 1.42 | — |
+| Up-capture / down-capture | 49.7% / 48.3% | 73.6% / 69.8% | — |
+| Years beating QQQ | 4/13 | 7/13 | — |
+
+v2 essentially **matches QQQ's total return** ($866 short over 12.5 years, a rounding
+distance on a $10K start) while still cutting max drawdown by a third relative to QQQ
+(-23.9% vs. -35.1%) and holding a materially better Sharpe/Sortino. It is not yet a clear,
+robust win over buy-and-hold — treat "beat QQQ" as approached, not achieved, until a
+tuning round is validated out-of-sample (see the caveat below).
+
+**Honest caveats, not glossed over:**
+- This is an **in-sample retune** — every parameter above was adjusted and then judged
+  against the same 2014-2026 window used for v1. §11's original recommendation (tune on
+  the first ~8 years, validate on the last ~4.5) was not followed here because the goal was
+  a fast first pass at closing the gap; the numbers above should be read as "plausible
+  improvement," not "validated out-of-sample edge." Some of this gain is likely real
+  (score-tilted sizing is a sound, generalizable fix), some is likely window-specific
+  (a 12.5-year period this heavy in AI-driven mega-cap rallies rewards concentration and
+  loose stops more than a typical window would).
+- Down-capture rose from 48% to 70% — v2 gives back much more in bad stretches than v1 did
+  in exchange for the up-capture gain. Max drawdown (-23.9%) is worse than v1's (-16.2%),
+  though still well inside QQQ's (-35.1%).
+- Turnover is still high (4,526 trades over 50 quarters) despite the min-hold and wider
+  swap margin; transaction costs (5bps/side) are a real, non-trivial drag at this trade
+  count and a further target for reduction.

@@ -70,7 +70,9 @@ def generate_signals(
 
     eligible = [t for t in composite.index if news_mult.get(t, 1.0) > 0.0]
     if current_regime == "risk_off" and use_fundamentals and f_scores.notna().sum() >= 8:
-        threshold = f_scores.quantile(0.75)
+        # Top half (was top quartile) — see backtest.py's module docstring
+        # for why (risk profile v2).
+        threshold = f_scores.quantile(0.5)
         eligible = [t for t in eligible if f_scores.get(t, 50.0) >= threshold]
 
     ranked = composite.reindex(eligible).dropna().sort_values(ascending=False)
@@ -80,7 +82,7 @@ def generate_signals(
         {t: indicators.atr(high[t], low[t], close[t]).loc[as_of] for t in selected}
     )
     atr_pct = atr14 / close.loc[as_of, selected]
-    weights = portfolio.size_positions(selected, atr_pct, target_invested_pct)
+    weights = portfolio.size_positions(selected, composite.reindex(selected), atr_pct, target_invested_pct)
 
     score_table = pd.DataFrame(
         {

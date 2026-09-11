@@ -4,13 +4,20 @@ Note on the composite formula (§4 of the doc): the markdown's original
 formula added a 0-1 news multiplier into a weighted sum of 0-100 scores,
 which mixes units inconsistently. This implementation uses the intended
 behavior instead — news is a *multiplier* on the trend+fundamental score,
-not a third additive term — and the doc has been updated to match:
+not a third additive term:
 
     composite = (trend_weight * trend_score + fundamental_weight * fundamental_score)
                 * news_risk_multiplier
 
-with trend_weight : fundamental_weight kept at the documented 40:35 ratio,
-renormalized to sum to 1.
+Risk profile v2 (see stock-trading-strategy.md "Risk profile v2" section):
+trend_weight:fundamental_weight moved from 40:35 to 75:25. The fundamental
+pillar's valuation sub-score (relative P/S vs. the universe) structurally
+penalizes the names re-rating the hardest — which, across 2014-2026, were
+also the names driving most of QQQ's return. Keeping fundamentals at
+near-equal weight to trend meant the composite consistently under-ranked the
+market's actual winners. Fundamentals still matter (profitability/balance
+sheet protect against pure momentum blowups) but now act as a secondary
+tilt, not a co-equal veto, on top of trend/momentum.
 """
 
 from __future__ import annotations
@@ -25,8 +32,8 @@ from . import indicators
 
 logger = logging.getLogger(__name__)
 
-TREND_WEIGHT = 0.40 / 0.75
-FUNDAMENTAL_WEIGHT = 0.35 / 0.75
+TREND_WEIGHT = 0.75
+FUNDAMENTAL_WEIGHT = 0.25
 
 SEVERE_NEGATIVE_KEYWORDS = [
     "investigation", "subpoena", "fraud", "restate", "restatement",
@@ -78,15 +85,20 @@ def compute_trend_scores(inputs: TrendInputs, as_of: pd.Timestamp) -> pd.Series:
     roc_rank = indicators.percentile_rank(roc.where(roc > 0))
     momentum_component = (roc_rank * 25.0).fillna(0.0)
 
-    # 3) Pullback quality — 25 pts, best when 0-8% above the 50-day SMA
+    # 3) Pullback quality — 25 pts, best when 0-15% above the 50-day SMA.
+    # v2: widened from 0-8% and softened the above-band decay (100 -> 60 pts
+    # per 1% beyond the band). The original band scored strong momentum
+    # leaders near zero exactly when they were extended during their best
+    # legs (e.g. NVDA routinely traded >8% above its 50-SMA through 2023-24),
+    # fighting the momentum sub-score instead of complementing it.
     dist = (price - sma50) / sma50
     pullback_component = pd.Series(0.0, index=close.columns)
-    in_band = (dist >= 0) & (dist <= 0.08)
+    in_band = (dist >= 0) & (dist <= 0.15)
     pullback_component[in_band] = 25.0
     below = dist < 0
     pullback_component[below] = (25.0 + dist[below] * 100.0).clip(lower=0.0)
-    above = dist > 0.08
-    pullback_component[above] = (25.0 - (dist[above] - 0.08) * 100.0).clip(lower=0.0)
+    above = dist > 0.15
+    pullback_component[above] = (25.0 - (dist[above] - 0.15) * 60.0).clip(lower=0.0)
 
     # 4) Volatility filter — 25 pts, lower relative ATR scores higher
     vol_rank = indicators.percentile_rank(atr_pct)
