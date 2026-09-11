@@ -105,10 +105,17 @@ preservation:
 
 ## 4. Composite score & ranking
 
+News is a **multiplier** on the trend+fundamental score, not a third additive term — an additive
+0.25 weight on a 0/0.5/1.0 multiplier would only ever move the composite by up to 25 points instead
+of scaling it, which understates what a severe headline should do (a full override to zero):
+
 ```
-composite = 0.40 * trend_score + 0.35 * fundamental_score + 0.25 * news_risk_multiplier
-news_risk_multiplier: 1.0 normally, 0.5 if "negative" headline pending review, 0 (hard exclude) if "severe negative"
+composite = (0.40/0.75 * trend_score + 0.35/0.75 * fundamental_score) * news_risk_multiplier
+news_risk_multiplier: 1.0 normally, 0.5 if "negative" headline pending review, 0.0 (hard exclude) if "severe negative"
 ```
+
+The 0.40/0.35 weights are renormalized to sum to 1 since news is now a separate multiplicative
+factor rather than a third weighted term.
 
 Rank the universe by `composite`. The **top N** names (see §5 for how N is set) become buy
 candidates each run, subject to the position-management rules below.
@@ -204,7 +211,59 @@ strategy winning every single year is a sign of look-ahead bias or overfitting, 
 | Earnings calendar | Next confirmed earnings date per name | Quarterly, checked each run |
 | News | Recent headlines per held/candidate name | Each run |
 
-## 10. Known limitations
+## 10. Reference implementation
+
+This design is implemented in [`strategy/`](strategy/) with a CLI at [`trading_strategy.py`](trading_strategy.py):
+
+```
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+python trading_strategy.py --list-universe            # the tracked ticker universe
+python trading_strategy.py --test-history              # backtest 50 quarters vs. buy-and-hold QQQ
+python trading_strategy.py --test-history --quarters 20 --capital 25000
+python trading_strategy.py --run                       # today's regime/scores/target portfolio (no trades placed)
+```
+
+Data comes from free, unauthenticated `yfinance` (Yahoo Finance) calls, cached to `.cache/`. Two
+implementation gaps versus the design worth knowing before reading backtest output:
+
+- **The news overlay is disabled in the backtest** (`NullNewsProvider`) — no free source of
+  point-in-time historical headlines exists for a 50-quarter window, so it can't be honestly
+  backtested. It's live in `--run` mode, driven by `yfinance`'s current headlines and a keyword
+  classifier. This is the §8 sanity check the design already calls for, just made a permanent split
+  rather than a one-off comparison.
+- **Fundamentals depth is shallow.** Free quarterly fundamentals from Yahoo typically cover only
+  the last several years, not the full 50-quarter window, so the fundamental sub-score is neutral
+  (50) for older dates and the composite leans on trend alone there — `--test-history` prints a
+  note when this is happening.
+
+### What the first full run actually showed
+
+A `--test-history` run (2014-03 → 2026-09, $10,000 start) came back with a result worth stating
+plainly rather than spinning: the strategy **did not** beat QQQ in total dollars ($39.6K vs.
+$86.1K), and beat it in only 4 of 13 calendar years — but exactly matches the §1 risk/return
+tension predicted going in:
+
+- Max drawdown was less than half of QQQ's (-15.0% vs. -35.1%) — the drawdown breaker, stops, and
+  risk-off de-risking are doing their job.
+- It won in QQQ's worst years (2018 flat, 2022 down -32.6%) and one strong year (2024).
+- It lost badly in QQQ's best years (2019 +39%, 2020 +48%, 2023 +55%) — up-capture came out at only
+  ~50%, so roughly half of every rally is left on the table, and this tech-heavy 12.5-year window
+  had an unusually large share of very strong up-years for that to compound against.
+
+This isn't a strategy that beats the index; it's a strategy that trades upside for a much shallower
+ride, in a period where upside was most of the story. Whether that trade is worth it depends on
+what "minimize risk of losing money" is actually worth to you — see §1 before assuming "beat the
+index" was ever the more achievable of the two stated goals.
+
+One implementation finding worth flagging: weekly re-scoring produced high turnover (thousands of
+trades over 50 quarters) — the composite score is sensitive enough to weekly price movement that
+positions churn more than the "few times a day, low frequency" spirit intended. A wider hysteresis
+margin (§5's current 15-point swap threshold) or a minimum holding period would likely reduce this
+without changing the core signal — an untried follow-up, not something already validated.
+
+## 11. Known limitations
 
 - Thresholds throughout (ATR multiples, score weights, drawdown trigger, caps) are reasoned
   starting points, not optimized — running §8's backtest will likely suggest adjustments, and any
